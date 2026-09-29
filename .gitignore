@@ -35,3 +35,10 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# Node / Frontend
+node_modules/
+.eslintcache
+.env.local
+.env.*.local
+

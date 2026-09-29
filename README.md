@@ -10,23 +10,34 @@ recommendations.
 ## Project Structure
 
 ```
-incident-agent/
+Incident_Agent/
 ├── .env                  # Local secrets (never commit)
 ├── .env.example          # Template — copy this to .env
 ├── requirements.txt
 ├── README.md
-└── backend/
-    ├── app/
-    │   ├── main.py       # FastAPI entry point
-    │   ├── api/          # Route handlers
-    │   │   ├── health.py     # GET /health
-    │   │   └── memory.py     # GET/POST /api/v1/memory/*
-    │   ├── core/         # Config, settings
-    │   ├── models/       # SQLAlchemy ORM models + Pydantic schemas
-    │   └── services/     # Business logic
-    │       └── hindsight_service.py  # Hindsight memory client
-    ├── tests/            # Test suite
-    └── pytest.ini        # pytest configuration
+├── backend/              # FastAPI AI Incident Response Backend
+│   ├── app/
+│   │   ├── main.py       # FastAPI entry point
+│   │   ├── api/          # Route handlers
+│   │   │   ├── health.py     # GET /health
+│   │   │   └── memory.py     # GET/POST /api/v1/memory/*
+│   │   ├── core/         # Config, settings
+│   │   ├── models/       # SQLAlchemy ORM models + Pydantic schemas
+│   │   └── services/     # Business logic
+│   │       └── hindsight_service.py  # Hindsight memory client
+│   ├── tests/            # Test suite
+│   └── pytest.ini        # pytest configuration
+└── frontend/             # React 19 + Vite 8 Incident Response Frontend
+    ├── package.json
+    ├── vite.config.js
+    ├── tailwind.config.js
+    └── src/
+        ├── components/
+        │   ├── project/  # ProjectUpload, ProjectAnalysisStatus, ProjectHeader, IncidentDashboard
+        │   ├── layout/   # Sidebar, Header, Layout
+        │   └── incident/ # Triage queues, timeline, logs
+        ├── pages/        # Dashboard, Incidents, Investigation, Memory, Runbooks
+        └── services/     # API service layer connecting to backend
 ```
 
 ---
