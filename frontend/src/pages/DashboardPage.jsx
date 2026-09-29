@@ -1,203 +1,126 @@
-import React, { useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  UploadCloud,
-  Sparkles,
-  ShieldAlert,
-  Boxes,
-  Cpu,
-  BrainCircuit,
-  ArrowRight,
-  FolderGit2,
-  CheckCircle2,
-  Clock,
-  Terminal,
-  Activity,
-} from 'lucide-react';
+import { AlertTriangle, Sparkles, CheckCircle2, Search, Plus, ArrowRight, Brain, Zap } from 'lucide-react';
+import { getIncidents } from '../services/api';
 import { useApp } from '../context/AppContext';
-import ProjectUpload from '../components/project/ProjectUpload';
-import ProjectAnalysisStatus from '../components/project/ProjectAnalysisStatus';
-import IncidentDashboard from '../components/project/IncidentDashboard';
+import SeverityBadge from '../components/common/SeverityBadge';
+import StatusBadge from '../components/common/StatusBadge';
+import CreateIncidentModal from '../components/incident/CreateIncidentModal';
 
-export default function DashboardPage() {
-  const navigate = useNavigate();
-  const { currentProject, setCurrentProject, uploadState, setUploadState, addToast } = useApp();
-
-  // Mode: if user has a project and wants to upload a new one, this flips to true
-  const [showUploadModal, setShowUploadModal] = useState(false);
-
-  // If currently uploading/analyzing/ready, show the ProjectAnalysisStatus screen
-  const isAnalyzing =
-    uploadState.status === 'uploading' ||
-    uploadState.status === 'analyzing' ||
-    uploadState.status === 'ready';
-
-  const handleNavigateToDashboard = () => {
-    if (uploadState.projectData) {
-      setCurrentProject(uploadState.projectData);
-    }
-    setUploadState({
-      status: 'idle',
-      progress: 0,
-      projectData: null,
-      error: null,
-    });
-    setShowUploadModal(false);
-  };
-
-  // Case 1: Analysis in progress or ready to navigate
-  if (isAnalyzing) {
-    return (
-      <div className="max-w-4xl mx-auto py-4 space-y-6">
-        <ProjectAnalysisStatus
-          uploadState={uploadState}
-          onNavigateToDashboard={handleNavigateToDashboard}
-        />
-      </div>
-    );
-  }
-
-  // Case 2: Project is active and user didn't ask to upload a new one
-  if (currentProject && !showUploadModal) {
-    return (
-      <IncidentDashboard
-        project={currentProject}
-        onUploadNewProject={() => setShowUploadModal(true)}
-      />
-    );
-  }
-
-  // Case 3: Landing / Onboarding Screen for the Incident Response Agent
+function KPI({ label, value, icon: Icon, color, sub }) {
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
-      {/* 1. Hero Landing Section */}
-      <div className="relative rounded-2xl overflow-hidden border border-border bg-gradient-to-b from-[#111827] via-[#0D1322] to-[#0A0F1C] p-6 sm:p-10 shadow-2xl">
-        {/* Glow ambient background circles */}
-        <div className="absolute top-0 right-1/4 w-72 h-72 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-1/3 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 max-w-3xl space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-medium bg-purple-950/80 text-purple-300 border border-purple-800/60 shadow-glow-ai">
-            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            <span>AUTONOMOUS CODEBASE INCIDENT RESPONSE</span>
-          </div>
-
-          <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight font-sans">
-            AI Incident Response Agent <br className="hidden sm:inline" />
-            <span className="bg-gradient-to-r from-purple-400 via-indigo-300 to-emerald-400 bg-clip-text text-transparent">
-              Powered by Hindsight Memory
-            </span>
-          </h1>
-
-          <p className="text-sm sm:text-base text-gray-300 leading-relaxed font-sans">
-            Upload your software project archive to establish automated microservice monitoring,
-            real-time anomaly detection, AI-driven root cause hypotheses, and continuous learning from historical post-mortems.
-          </p>
-
-          {/* Quick action buttons & Return if already uploaded */}
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
-              onClick={() => {
-                const uploadElement = document.getElementById('project-upload-section');
-                uploadElement?.scrollIntoView({ behavior: 'smooth' });
-              }}
-              className="px-6 py-2.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-glow-ai flex items-center gap-2 cursor-pointer transition-all active:scale-95"
-            >
-              <UploadCloud className="w-4 h-4" />
-              <span>Upload Project (.zip)</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-
-            {currentProject && (
-              <button
-                onClick={() => setShowUploadModal(false)}
-                className="px-4 py-2.5 rounded-lg text-xs font-medium bg-[#151D2E] hover:bg-card border border-border text-gray-200 flex items-center gap-2 transition-colors cursor-pointer"
-              >
-                <FolderGit2 className="w-4 h-4 text-purple-400" />
-                <span>Return to {currentProject.name}</span>
-              </button>
-            )}
-          </div>
-        </div>
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</span>
+        <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${color}`}><Icon className="w-4 h-4"/></div>
       </div>
-
-      {/* 2. Drag & Drop Project Upload Section */}
-      <div id="project-upload-section" className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-bold text-white tracking-wide font-sans">
-              Codebase Ingestion & Onboarding
-            </h2>
-            <p className="text-xs text-gray-400">
-              Provide your software repository ZIP to initialize the incident response pipeline
-            </p>
-          </div>
-          {currentProject && (
-            <button
-              onClick={() => setShowUploadModal(false)}
-              className="text-xs font-mono text-gray-400 hover:text-white"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-
-        <ProjectUpload
-          onUploadStarted={() => {}}
-          onUploadSuccess={(parsedProject) => {
-            // Success callback
-          }}
-        />
-      </div>
-
-      {/* 3. Capabilities & Architectural Pillars */}
-      <div className="space-y-4 pt-4">
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider font-mono">
-          Agent Architectural Pipeline
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="p-4 rounded-xl bg-card border border-border space-y-2.5">
-            <div className="w-9 h-9 rounded-lg bg-[#151D2E] border border-border flex items-center justify-center text-purple-400">
-              <Cpu className="w-5 h-5" />
-            </div>
-            <h4 className="text-sm font-semibold text-gray-200">1. AST Code Analysis</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Scans directory layout, entrypoints, and microservices to map dependencies and failure surface areas.
-            </p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-card border border-border space-y-2.5">
-            <div className="w-9 h-9 rounded-lg bg-[#151D2E] border border-border flex items-center justify-center text-indigo-400">
-              <Activity className="w-5 h-5" />
-            </div>
-            <h4 className="text-sm font-semibold text-gray-200">2. Telemetry Ingress</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Hooks real-time logs and metrics from production into the active project monitoring queue.
-            </p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-card border border-border space-y-2.5">
-            <div className="w-9 h-9 rounded-lg bg-[#151D2E] border border-border flex items-center justify-center text-emerald-400">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <h4 className="text-sm font-semibold text-gray-200">3. AI Root-Cause War-Room</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Autonomous multi-hop reasoning generates hypotheses, verified runbooks, and mitigation plans.
-            </p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-card border border-border space-y-2.5">
-            <div className="w-9 h-9 rounded-lg bg-[#151D2E] border border-border flex items-center justify-center text-blue-400">
-              <BrainCircuit className="w-5 h-5" />
-            </div>
-            <h4 className="text-sm font-semibold text-gray-200">4. Hindsight Memory</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              Vector memory stores every resolution outcome so future similar incidents resolve exponentially faster.
-            </p>
-          </div>
-        </div>
-      </div>
+      <p className="text-3xl font-bold text-slate-800">{value}</p>
+      {sub && <p className="text-xs text-slate-400 mt-1">{sub}</p>}
     </div>
   );
 }
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const d = Math.floor((Date.now()-new Date(iso))/60000);
+  if (d<1) return 'just now'; if (d<60) return `${d}m ago`;
+  const h=Math.floor(d/60); if (h<24) return `${h}h ago`;
+  return `${Math.floor(h/24)}d ago`;
+}
+
+export default function DashboardPage() {
+  const navigate = useNavigate();
+  const { addToast } = useApp();
+  const [incidents, setIncidents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+
+  useEffect(() => {
+    getIncidents({}).then(d=>{ setIncidents(d||[]); setLoading(false); }).catch(()=>setLoading(false));
+  }, []);
+
+  const active   = incidents.filter(i=>!['resolved','closed'].includes(i.status)).length;
+  const critical = incidents.filter(i=>i.severity==='critical').length;
+  const investigating = incidents.filter(i=>i.status==='investigating'||i.status==='in_progress').length;
+  const resolved = incidents.filter(i=>i.status==='resolved').length;
+  const recent   = [...incidents].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,5);
+
+  const handleCreated = inc => { setIncidents(p=>[inc,...p]); setShowCreate(false); addToast({title:'Incident Reported',message:`"${inc.title}" created.`,type:'success'}); };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Operations Dashboard</h1>
+          <p className="text-sm text-slate-500 mt-0.5">AI-powered incident response — real-time overview</p>
+        </div>
+        <button onClick={()=>setShowCreate(true)} className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-violet-600 hover:bg-violet-700 rounded-xl transition-colors shadow-sm">
+          <Plus className="w-4 h-4"/>Report Incident
+        </button>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPI label="Active Incidents" value={loading?'—':active}   icon={AlertTriangle}  color="bg-blue-50 text-blue-600"    sub="Requiring attention"/>
+        <KPI label="Critical"         value={loading?'—':critical} icon={Zap}            color="bg-red-50 text-red-600"      sub="Highest priority"/>
+        <KPI label="Investigating"    value={loading?'—':investigating} icon={Search}     color="bg-violet-50 text-violet-600" sub="AI analyzing"/>
+        <KPI label="Resolved"         value={loading?'—':resolved} icon={CheckCircle2}   color="bg-emerald-50 text-emerald-600" sub="Completed"/>
+      </div>
+
+      {/* Capability cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[
+          { icon: AlertTriangle, color: 'text-violet-600 bg-violet-50', title: 'Incident Ingestion', desc: 'Report incidents with title, service, severity, error messages and log evidence.', action: 'Report Incident', to: null, fn: ()=>setShowCreate(true) },
+          { icon: Brain,         color: 'text-indigo-600 bg-indigo-50', title: 'Hindsight Memory',  desc: 'Historical incident knowledge is retrieved automatically to enrich every new analysis.', action: 'View Memory', to: '/memory' },
+          { icon: Sparkles,      color: 'text-violet-600 bg-violet-50', title: 'AI Root Cause',     desc: 'Groq LLM generates root cause, resolution steps, and prevention recommendations.', action: 'View Incidents', to: '/incidents' },
+        ].map(card => (
+          <div key={card.title} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card flex flex-col gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${card.color}`}><card.icon className="w-5 h-5"/></div>
+            <div>
+              <h3 className="font-semibold text-slate-800">{card.title}</h3>
+              <p className="text-sm text-slate-500 mt-1 leading-relaxed">{card.desc}</p>
+            </div>
+            <button onClick={card.fn||(()=>navigate(card.to))} className="mt-auto inline-flex items-center gap-1.5 text-sm font-semibold text-violet-600 hover:text-violet-700 transition-colors">
+              {card.action}<ArrowRight className="w-3.5 h-3.5"/>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Recent Incidents */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <h2 className="font-semibold text-slate-800">Recent Incidents</h2>
+          <button onClick={()=>navigate('/incidents')} className="text-sm text-violet-600 hover:text-violet-700 font-medium flex items-center gap-1">View all<ArrowRight className="w-3.5 h-3.5"/></button>
+        </div>
+        {loading ? (
+          <div className="p-8 text-center text-sm text-slate-400">Loading incidents...</div>
+        ) : recent.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-400">No incidents yet. <button onClick={()=>setShowCreate(true)} className="text-violet-600 font-medium">Report one</button></div>
+        ) : (
+          <div className="divide-y divide-slate-50">
+            {recent.map(inc => (
+              <div key={inc.id} onClick={()=>navigate(`/investigation/${inc.id}`)} className="px-5 py-3.5 flex items-center justify-between hover:bg-violet-50/30 cursor-pointer transition-colors group">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <SeverityBadge severity={inc.severity}/>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 truncate group-hover:text-violet-700 transition-colors">{inc.title}</p>
+                    <p className="text-xs text-slate-400 font-mono">{inc.service} · {timeAgo(inc.created_at)}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0 ml-4">
+                  <StatusBadge status={inc.status}/>
+                  {inc.analysis?.root_cause && <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 font-semibold border border-violet-100">AI ✓</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <CreateIncidentModal isOpen={showCreate} onClose={()=>setShowCreate(false)} onCreated={handleCreated}/>
+    </div>
+  );
+}
+

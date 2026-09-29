@@ -1,193 +1,88 @@
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Filter, RotateCcw, ShieldAlert, Sparkles, Layers } from 'lucide-react';
+import { Search, RotateCcw, Plus } from 'lucide-react';
 import IncidentTable from '../components/incident/IncidentTable';
+import CreateIncidentModal from '../components/incident/CreateIncidentModal';
 import { getIncidents } from '../services/api';
 import { useApp } from '../context/AppContext';
 
 export default function IncidentsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { refreshTrigger } = useApp();
-
+  const { refreshTrigger, addToast } = useApp();
   const [incidents, setIncidents] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Filters
+  const [showCreate, setShowCreate] = useState(false);
   const [searchQuery, setSearchQuery] = useState(searchParams.get('search') || '');
   const [severityFilter, setSeverityFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [serviceFilter, setServiceFilter] = useState('All');
 
-  const services = [
-    'All',
-    'Payment API',
-    'Auth Service',
-    'Order Service',
-    'Catalog',
-    'Notification Gateway',
-    'Billing Service',
-    'User Service',
-    'Ingress Gateway',
-  ];
-
-  const severities = ['All', 'Critical', 'High', 'Medium', 'Low'];
-  const statuses = ['All', 'Open', 'Investigating', 'Resolved'];
+  useEffect(() => { const q = searchParams.get('search'); if (q !== null) setSearchQuery(q); }, [searchParams]);
 
   useEffect(() => {
-    // If URL query changes
-    const q = searchParams.get('search');
-    if (q !== null) {
-      setSearchQuery(q);
-    }
-  }, [searchParams]);
+    setIsLoading(true);
+    getIncidents({ search: searchQuery, severity: severityFilter, status: statusFilter })
+      .then(d => setIncidents(d || []))
+      .catch(e => console.error(e))
+      .finally(() => setIsLoading(false));
+  }, [searchQuery, severityFilter, statusFilter, refreshTrigger]);
 
-  useEffect(() => {
-    async function fetchIncidents() {
-      setIsLoading(true);
-      try {
-        const data = await getIncidents({
-          search: searchQuery,
-          severity: severityFilter,
-          status: statusFilter,
-          service: serviceFilter,
-        });
-        setIncidents(data);
-      } catch (err) {
-        console.error('Failed to load incidents:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    fetchIncidents();
-  }, [searchQuery, severityFilter, statusFilter, serviceFilter, refreshTrigger]);
-
-  const handleResetFilters = () => {
-    setSearchQuery('');
-    setSeverityFilter('All');
-    setStatusFilter('All');
-    setServiceFilter('All');
-    setSearchParams({});
+  const handleReset = () => { setSearchQuery(''); setSeverityFilter('All'); setStatusFilter('All'); setSearchParams({}); };
+  const handleCreated = inc => {
+    setIncidents(p => [inc, ...p]);
+    setShowCreate(false);
+    addToast && addToast({ title: 'Incident Reported', message: `"${inc.title}" created.`, type: 'success' });
   };
 
+  const severities = ['All','Critical','High','Medium','Low'];
+  const statuses   = ['All','Open','In Progress','Resolved'];
+  const hasFilters = searchQuery || severityFilter !== 'All' || statusFilter !== 'All';
+
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-border/80">
+    <div className="space-y-5 animate-in fade-in duration-300">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white font-sans">
-              Incidents
-            </h1>
-            <span className="text-xs font-mono text-purple-400 bg-[#151D2E] px-2 py-0.5 rounded border border-border">
-              {incidents.length} recorded
-            </span>
-          </div>
-          <p className="text-xs sm:text-sm text-gray-400 mt-1">
-            Track, triage and investigate production incidents across all clusters.
-          </p>
+          <h1 className="text-2xl font-bold text-slate-800">Incidents</h1>
+          <p className="text-sm text-slate-500 mt-0.5">{incidents.length} recorded · real-time production incidents</p>
         </div>
+        <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-violet-600 hover:bg-violet-700 rounded-xl transition-colors shadow-sm shrink-0">
+          <Plus className="w-4 h-4" />Report Incident
+        </button>
       </div>
 
-      {/* Top Filter Controls */}
-      <div className="bg-card rounded-lg border border-border p-4 space-y-3">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-3">
-          {/* Search bar */}
-          <div className="relative w-full md:w-80">
-            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search incidents or errors..."
-              className="w-full bg-[#151D2E] border border-border rounded-lg pl-9 pr-3 py-1.5 text-xs text-gray-200 placeholder-gray-400 focus:outline-none focus:border-purple-500 font-sans"
-            />
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-4 space-y-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search incidents..." className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-all" />
           </div>
-
-          {/* Quick Clear Filter Button */}
-          {(searchQuery || severityFilter !== 'All' || statusFilter !== 'All' || serviceFilter !== 'All') && (
-            <button
-              onClick={handleResetFilters}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono text-gray-400 hover:text-white bg-[#151D2E] hover:bg-card border border-border rounded-lg transition-colors ml-auto"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset Filters</span>
+          {hasFilters && (
+            <button onClick={handleReset} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors">
+              <RotateCcw className="w-3.5 h-3.5" />Reset
             </button>
           )}
         </div>
-
-        {/* Filter Pills / Dropdowns */}
-        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border/70 text-xs">
-          {/* Severity Filter */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-mono text-gray-400 uppercase tracking-wider">
-              Severity:
-            </span>
-            <div className="flex items-center gap-1 bg-[#0e1422] p-0.5 rounded-lg border border-border">
-              {severities.map((sev) => (
-                <button
-                  key={sev}
-                  onClick={() => setSeverityFilter(sev)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium transition-colors ${
-                    severityFilter === sev
-                      ? 'bg-purple-600 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  {sev}
-                </button>
+        <div className="flex flex-wrap gap-4 pt-2 border-t border-slate-100">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Severity:</span>
+            <div className="flex gap-1 bg-slate-50 p-0.5 rounded-xl border border-slate-200">
+              {severities.map(s => (
+                <button key={s} onClick={() => setSeverityFilter(s)} className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${severityFilter === s ? 'bg-white text-violet-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>{s}</button>
               ))}
             </div>
           </div>
-
-          {/* Status Filter */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-mono text-gray-400 uppercase tracking-wider">
-              Status:
-            </span>
-            <div className="flex items-center gap-1 bg-[#0e1422] p-0.5 rounded-lg border border-border">
-              {statuses.map((st) => (
-                <button
-                  key={st}
-                  onClick={() => setStatusFilter(st)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium transition-colors ${
-                    statusFilter === st
-                      ? 'bg-purple-600 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  {st}
-                </button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Status:</span>
+            <div className="flex gap-1 bg-slate-50 p-0.5 rounded-xl border border-slate-200">
+              {statuses.map(s => (
+                <button key={s} onClick={() => setStatusFilter(s)} className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${statusFilter === s ? 'bg-white text-violet-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>{s}</button>
               ))}
             </div>
-          </div>
-
-          {/* Service Dropdown */}
-          <div className="flex items-center gap-1.5 ml-auto">
-            <span className="text-[11px] font-mono text-gray-400 uppercase tracking-wider">
-              Service:
-            </span>
-            <select
-              value={serviceFilter}
-              onChange={(e) => setServiceFilter(e.target.value)}
-              className="bg-[#151D2E] border border-border rounded px-2.5 py-1 text-xs font-mono text-gray-200 focus:outline-none focus:border-purple-500"
-            >
-              {services.map((svc) => (
-                <option key={svc} value={svc}>
-                  {svc}
-                </option>
-              ))}
-            </select>
           </div>
         </div>
       </div>
 
-      {/* Main Incident Table */}
-      <IncidentTable
-        incidents={incidents}
-        isLoading={isLoading}
-        onResetFilters={handleResetFilters}
-      />
+      <IncidentTable incidents={incidents} isLoading={isLoading} onResetFilters={handleReset} />
+      <CreateIncidentModal isOpen={showCreate} onClose={() => setShowCreate(false)} onCreated={handleCreated} />
     </div>
   );
 }

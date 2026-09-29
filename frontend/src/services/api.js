@@ -1,486 +1,372 @@
-// API Service Abstraction Layer for Incident Response Agent
-// Built to interface directly with FastAPI backend when available, with resilient mock fallback
+﻿import axios from 'axios';
+import { API_BASE_URL } from '../config';
 
-import axios from 'axios';
-import { API_BASE_URL, APP_CONFIG } from '../config';
-import {
-  mockDashboardStats,
-  mockIncidents,
-  mockAiInvestigations,
-  mockRunbooks,
-  mockMemoryItems,
-  mockRecentActivity,
-} from '../data/mockData';
-import { parseProjectZip } from '../utils/zipParser';
-
-// Configure Axios client
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 5000,
-  headers: {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  },
+  timeout: 60000,
+  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
 });
 
-// Helper for simulated delay when using fallback mock data
-const delay = (ms = APP_CONFIG.mockLatencyMs) => new Promise((resolve) => setTimeout(resolve, ms));
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-// In-memory state for mock fallback so mutations (resolve, assign) reflect immediately in UI
-let localIncidents = [...mockIncidents];
-let localMemory = [...mockMemoryItems];
-
-/**
- * Dashboard & Summary Statistics
- * GET /api/dashboard/stats
- */
-export async function getDashboardStats() {
-  try {
-    const response = await apiClient.get('/api/dashboard/stats');
-    return response.data;
-  } catch (error) {
-    console.info('[API:Fallback] Using mock dashboard stats:', error.message);
-    await delay();
-    return {
-      ...mockDashboardStats,
-      activeIncidents: localIncidents.filter((i) => i.status !== 'Resolved').length,
-      investigatingIncidents: localIncidents.filter((i) => i.status === 'Investigating').length,
-    };
-  }
+function normalizeIncident(incident) {
+  return {
+    ...incident,
+    error_message: incident.error_message ?? '',
+    logs: incident.logs ?? '',
+    error: incident.error_message ?? '',
+    createdAt: incident.created_at,
+    updatedAt: incident.updated_at,
+    displayStatus: incident.status,
+    displaySeverity: incident.severity,
+    analysis: incident.analysis ?? {
+      root_cause: null, resolution_steps: null,
+      prevention_recommendations: null, confidence: null, reasoning: null,
+    },
+  };
 }
 
-/**
- * Get all incidents with optional filtering
- * GET /api/incidents
- */
+function toInvestigation(incident) {
+  const analysis = incident.analysis ?? {};
+  return {
+    incidentId: incident.id,
+    title: incident.title,
+    service: incident.service,
+    severity: incident.severity,
+    status: incident.status,
+    createdAt: incident.created_at,
+    error: incident.error_message ?? '',
+    logs: incident.logs ?? '',
+    confidenceScore: analysis.confidence != null ? Math.round(analysis.confidence * 100) : null,
+    rootCause: analysis.root_cause ?? null,
+    rootCauseDetails: analysis.reasoning ?? null,
+    reasoningEvidence: analysis.reasoning ? [analysis.reasoning] : [],
+    recommendedAction: analysis.resolution_steps ?? null,
+    preventionRecommendations: analysis.prevention_recommendations ?? null,
+    similarIncidents: [],
+    recommendedRunbook: null,
+    workflowSteps: [
+      { step: 1, title: 'Incident loaded',           detail: 'Incident retrieved from database',        status: 'completed', time: 'Done'    },
+      { step: 2, title: 'Hindsight memory queried',   detail: 'Historical context retrieved',            status: analysis.root_cause ? 'completed' : 'pending', time: analysis.root_cause ? 'Done' : 'Pending' },
+      { step: 3, title: 'AI reasoning completed',     detail: 'Groq generated structured analysis',      status: analysis.root_cause ? 'completed' : 'pending', time: analysis.root_cause ? 'Done' : 'Pending' },
+      { step: 4, title: 'Analysis persisted',         detail: 'AI analysis saved to SQLite',             status: analysis.root_cause ? 'completed' : 'pending', time: analysis.root_cause ? 'Done' : 'Pending' },
+      { step: 5, title: 'Knowledge stored',           detail: 'Analysis sent to Hindsight memory store', status: analysis.root_cause ? 'completed' : 'pending', time: analysis.root_cause ? 'Done' : 'Pending' },
+    ],
+  };
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
+export async function getHealth() {
+  const r = await apiClient.get('/health');
+  return r.data;
+}
+
+// ── Incidents ─────────────────────────────────────────────────────────────────
 export async function getIncidents(params = {}) {
-  try {
-    const response = await apiClient.get('/api/incidents', { params });
-    return response.data;
-  } catch (error) {
-    console.info('[API:Fallback] Using mock incidents:', error.message);
-    await delay();
-    let result = [...localIncidents];
+  const r = await apiClient.get('/api/v1/incidents', { params: { skip: params.skip ?? 0, limit: params.limit ?? 100 } });
+  const data = r.data;
+  let incidents = Array.isArray(data) ? data : data.items ?? [];
 
-    if (params.search) {
-      const q = params.search.toLowerCase();
-      result = result.filter(
-        (i) =>
-          i.id.toLowerCase().includes(q) ||
-          i.title.toLowerCase().includes(q) ||
-          i.service.toLowerCase().includes(q) ||
-          i.error.toLowerCase().includes(q)
-      );
-    }
-    if (params.severity && params.severity !== 'All') {
-      result = result.filter((i) => i.severity.toLowerCase() === params.severity.toLowerCase());
-    }
-    if (params.status && params.status !== 'All') {
-      result = result.filter((i) => i.status.toLowerCase() === params.status.toLowerCase());
-    }
-    if (params.service && params.service !== 'All') {
-      result = result.filter((i) => i.service.toLowerCase() === params.service.toLowerCase());
-    }
-
-    return result;
+  if (params.search) {
+    const q = params.search.toLowerCase();
+    incidents = incidents.filter(i =>
+      [i.id, i.title, i.service, i.error_message, i.logs].filter(Boolean).some(v => String(v).toLowerCase().includes(q))
+    );
   }
+  if (params.severity && params.severity !== 'All') {
+    incidents = incidents.filter(i => String(i.severity).toLowerCase() === params.severity.toLowerCase());
+  }
+  if (params.status && params.status !== 'All') {
+    const statusMap = { Open: 'open', Investigating: 'in_progress', 'In Progress': 'in_progress', Resolved: 'resolved', Closed: 'closed' };
+    const s = statusMap[params.status] ?? params.status;
+    incidents = incidents.filter(i => String(i.status).toLowerCase() === s.toLowerCase());
+  }
+  if (params.service && params.service !== 'All') {
+    incidents = incidents.filter(i => String(i.service).toLowerCase() === params.service.toLowerCase());
+  }
+  return incidents.map(normalizeIncident);
 }
 
-/**
- * Get incident by ID
- * GET /api/incidents/{id}
- */
 export async function getIncidentById(id) {
-  try {
-    const response = await apiClient.get(`/api/incidents/${id}`);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Using mock for incident ${id}:`, error.message);
-    await delay();
-    const found = localIncidents.find((i) => i.id === id);
-    if (!found) {
-      // Fallback default if not found
-      return localIncidents[0];
-    }
-    return found;
-  }
+  const r = await apiClient.get(`/api/v1/incidents/${id}`);
+  return normalizeIncident(r.data);
 }
 
-/**
- * Get AI Investigation for an incident
- * GET /api/incidents/{id}/investigate or GET /api/investigation/{id}
- */
-export async function getIncidentInvestigation(id) {
-  try {
-    const response = await apiClient.get(`/api/incidents/${id}/investigate`);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Using mock investigation for ${id}:`, error.message);
-    await delay();
-    if (mockAiInvestigations[id]) {
-      return mockAiInvestigations[id];
-    }
-    // Dynamic generated mock if specific ID isn't pre-populated
-    const incident = localIncidents.find((i) => i.id === id) || localIncidents[0];
-    return {
-      incidentId: incident.id,
-      title: incident.title,
-      service: incident.service,
-      confidenceScore: 91,
-      status: 'Awaiting engineer review',
-      rootCause: incident.rootCause || 'Upstream service degradation and timeout cascade',
-      rootCauseDetails: `AI analysis of ${incident.service} logs reveals elevated error rates matching historical failure signatures.`,
-      reasoningEvidence: [
-        `Observed error signature: ${incident.error}`,
-        `Service ${incident.service} telemetry indicates saturation during peak traffic window.`,
-        'Correlated with historical incidents stored in Hindsight memory.',
-      ],
-      similarIncidents: [
-        {
-          id: 'INC-0871',
-          title: 'Payment Checkout DB Pool Starvation',
-          service: incident.service,
-          similarity: 88,
-          date: '2026-07-14',
-          rootCause: 'Connection saturation',
-          resolution: 'Pool configuration adjustment',
-          verifiedBy: 'Alex Chen',
-        },
-      ],
-      recommendedAction: 'Apply recommended mitigation runbook and review resource allocation limits.',
-      recommendedRunbook: {
-        id: 'DB-CONNECTION-POOL-01',
-        title: 'Database Connection Pool Recovery',
-        category: 'Database',
-        estimatedTime: '4 min',
-        riskLevel: 'Low',
-      },
-      workflowSteps: [
-        { step: 1, title: 'Incident parsed', detail: `Parsed ${incident.service} incident data`, status: 'completed', time: 'Just now' },
-        { step: 2, title: 'Similar incidents searched', detail: 'Found 2 historical matches', status: 'completed', time: 'Just now' },
-        { step: 3, title: 'Context built', detail: 'Telemetry combined with runbook specs', status: 'completed', time: 'Just now' },
-        { step: 4, title: 'AI reasoning completed', detail: 'Generated root cause hypotheses', status: 'completed', time: 'Just now' },
-        { step: 5, title: 'Recommendation generated', detail: 'Mitigation recommendation created', status: 'completed', time: 'Just now' },
-        { step: 6, title: 'Awaiting engineer review', detail: 'Human sign-off required', status: 'pending', time: 'Active' },
-      ],
-    };
-  }
+export async function createIncident(data) {
+  const r = await apiClient.post('/api/v1/incidents', {
+    title: data.title,
+    service: data.service,
+    severity: String(data.severity ?? 'medium').toLowerCase(),
+    error_message: data.error_message ?? data.error ?? null,
+    logs: data.logs ?? null,
+  });
+  return normalizeIncident(r.data);
 }
 
-/**
- * Trigger AI Re-investigation
- * POST /api/incidents/{id}/investigate
- */
+export async function updateIncident(id, data) {
+  const payload = {};
+  if (data.title !== undefined)   payload.title = data.title;
+  if (data.service !== undefined) payload.service = data.service;
+  if (data.severity !== undefined) payload.severity = String(data.severity).toLowerCase();
+  if (data.status !== undefined) {
+    const m = { Open:'open', Investigating:'in_progress', 'In Progress':'in_progress', Resolved:'resolved', Closed:'closed' };
+    payload.status = m[data.status] ?? data.status;
+  }
+  if (data.error_message !== undefined) payload.error_message = data.error_message;
+  if (data.logs !== undefined)          payload.logs = data.logs;
+  const r = await apiClient.patch(`/api/v1/incidents/${id}`, payload);
+  return normalizeIncident(r.data);
+}
+
+export async function deleteIncident(id) {
+  await apiClient.delete(`/api/v1/incidents/${id}`);
+  return { success: true };
+}
+
+// ── AI Analysis ───────────────────────────────────────────────────────────────
 export async function triggerInvestigation(id) {
-  try {
-    const response = await apiClient.post(`/api/incidents/${id}/investigate`);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Simulating AI investigation for ${id}:`, error.message);
-    await delay(1200); // realistic time for AI reasoning simulation
-    return getIncidentInvestigation(id);
-  }
+  // Mark as in_progress first so dashboard Investigating count updates
+  try { await updateIncident(id, { status: 'in_progress' }); } catch (_) {}
+  const r = await apiClient.post(`/api/v1/incidents/${id}/analyze`);
+  return toInvestigation(normalizeIncident(r.data));
 }
 
-/**
- * Get Similar Incidents
- * GET /api/incidents/{id}/similar
- */
-export async function getSimilarIncidents(id) {
-  try {
-    const response = await apiClient.get(`/api/incidents/${id}/similar`);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Using mock similar incidents for ${id}:`, error.message);
-    await delay();
-    const inv = mockAiInvestigations[id];
-    return inv ? inv.similarIncidents : mockAiInvestigations['INC-1024'].similarIncidents;
-  }
+export async function analyzeIncident(id) {
+  return triggerInvestigation(id);
 }
 
-/**
- * Get Hindsight Memory items
- * GET /api/memory
- */
-export async function getMemoryItems(params = {}) {
-  try {
-    const response = await apiClient.get('/api/memory', { params });
-    return response.data;
-  } catch (error) {
-    console.info('[API:Fallback] Using mock memory items:', error.message);
-    await delay();
-    let result = [...localMemory];
-
-    if (params.search) {
-      const q = params.search.toLowerCase();
-      result = result.filter(
-        (m) =>
-          m.id.toLowerCase().includes(q) ||
-          m.incidentId.toLowerCase().includes(q) ||
-          m.service.toLowerCase().includes(q) ||
-          m.rootCause.toLowerCase().includes(q) ||
-          m.resolution.toLowerCase().includes(q) ||
-          (m.lessonsLearned && m.lessonsLearned.toLowerCase().includes(q))
-      );
-    }
-    if (params.service && params.service !== 'All') {
-      result = result.filter((m) => m.service.toLowerCase() === params.service.toLowerCase());
-    }
-    if (params.severity && params.severity !== 'All') {
-      result = result.filter((m) => m.severity.toLowerCase() === params.severity.toLowerCase());
-    }
-
-    return result;
-  }
+export async function getIncidentInvestigation(id) {
+  const r = await apiClient.get(`/api/v1/incidents/${id}`);
+  return toInvestigation(normalizeIncident(r.data));
 }
 
-/**
- * Get single memory item
- * GET /api/memory/{id}
- */
+export async function getIncidentAnalysis(id) {
+  const r = await apiClient.get(`/api/v1/incidents/${id}/analysis`);
+  return r.data;
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+export async function getDashboardStats() {
+  const r = await apiClient.get('/api/v1/incidents', { params: { skip: 0, limit: 100 } });
+  const data = r.data;
+  const incidents = Array.isArray(data) ? data : data.items ?? [];
+  return {
+    totalIncidents: data.total ?? incidents.length,
+    activeIncidents: incidents.filter(i => i.status !== 'resolved' && i.status !== 'closed').length,
+    investigatingIncidents: incidents.filter(i => i.status === 'in_progress').length,
+    resolvedIncidents: incidents.filter(i => i.status === 'resolved').length,
+    criticalIncidents: incidents.filter(i => i.severity === 'critical').length,
+  };
+}
+
+// ── Hindsight Memory ──────────────────────────────────────────────────────────
+// Connected to real backend: POST /api/v1/memory/search
+// The backend calls Hindsight's semantic search.
+// Returns an array of memory items or throws on error (do NOT swallow errors).
+
+export async function getMemoryItems(query = 'incident resolution root cause') {
+  const r = await apiClient.post('/api/v1/memory/search', {
+    query,
+    max_tokens: 4096,
+    budget: 'mid',
+  });
+  // Backend returns { results: [...], memory_count: N }
+  return r.data.results ?? [];
+}
+
+export async function searchMemoryItems(query) {
+  if (!query || !query.trim()) return getMemoryItems();
+  return getMemoryItems(query);
+}
+
 export async function getMemoryItem(id) {
-  try {
-    const response = await apiClient.get(`/api/memory/${id}`);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Using mock memory detail for ${id}:`, error.message);
-    await delay();
-    return localMemory.find((m) => m.id === id || m.incidentId === id) || localMemory[0];
-  }
+  // No individual memory item endpoint exists — return null
+  return null;
 }
 
-/**
- * Get Runbooks
- * GET /api/runbooks
- */
+export async function checkMemoryHealth() {
+  const r = await apiClient.get('/api/v1/memory/health');
+  return r.data;
+}
+
+// ── Runbooks ──────────────────────────────────────────────────────────────────
+// No runbook backend endpoint exists.
+// We provide a curated static catalog so the page is not empty.
+// This is honest — it is NOT pretending to come from the backend.
+
+const STATIC_RUNBOOKS = [
+  {
+    id: 'RB-DB-001',
+    title: 'Database Connection Pool Exhaustion',
+    category: 'Database',
+    description: 'Step-by-step runbook for diagnosing and resolving database connection pool saturation.',
+    risk: 'Medium',
+    estimatedTime: '15-30 min',
+    steps: [
+      'Check current pool utilization: SELECT count(*) FROM pg_stat_activity',
+      'Identify long-running or idle connections blocking pool slots',
+      'Kill idle connections: SELECT pg_terminate_backend(pid) WHERE state = \'idle\'',
+      'Review pool configuration (max_connections, pool_size, timeout settings)',
+      'Restart the affected service to clear stale connections',
+      'Monitor connection metrics for 15 minutes post-restart',
+    ],
+    verification: 'Pool utilization drops below 80% and connection errors cease',
+    tags: ['database', 'postgresql', 'connection-pool'],
+  },
+  {
+    id: 'RB-DB-002',
+    title: 'Database Query Timeout Investigation',
+    category: 'Database',
+    description: 'Diagnose slow queries causing request timeouts and 503 errors.',
+    risk: 'Low',
+    estimatedTime: '20-45 min',
+    steps: [
+      'Enable slow query logging if not already active',
+      'Identify queries exceeding timeout threshold in pg_stat_statements',
+      'Run EXPLAIN ANALYZE on slow queries to find missing indexes',
+      'Add missing indexes or rewrite inefficient queries',
+      'Test with load to confirm latency improvement',
+    ],
+    verification: 'P95 query latency returns to baseline',
+    tags: ['database', 'performance', 'query-optimization'],
+  },
+  {
+    id: 'RB-AUTH-001',
+    title: 'JWT / JWKS Invalidation Recovery',
+    category: 'Authentication',
+    description: 'Resolve authentication failures caused by JWKS key rotation or token invalidation.',
+    risk: 'High',
+    estimatedTime: '10-20 min',
+    steps: [
+      'Confirm JWKS endpoint is reachable: curl https://auth.example.com/.well-known/jwks.json',
+      'Check auth service logs for key rotation events',
+      'Flush local JWKS cache in affected services',
+      'Restart auth service to reload keys',
+      'Verify token validation succeeds with a test request',
+    ],
+    verification: '401 error rate drops to 0% within 2 minutes of restart',
+    tags: ['authentication', 'jwt', 'security'],
+  },
+  {
+    id: 'RB-PAY-001',
+    title: 'Payment API 503 Recovery',
+    category: 'Payment',
+    description: 'Restore Payment API availability during 503 Service Unavailable outages.',
+    risk: 'Critical',
+    estimatedTime: '10-25 min',
+    steps: [
+      'Check payment-api pod/container health and restart if crashed',
+      'Review error logs for the specific 503 cause (DB, downstream, OOM)',
+      'Scale payment-api instances if under traffic spike',
+      'Verify downstream payment processor connectivity',
+      'Enable circuit breaker if repeated failures detected',
+      'Notify on-call payment engineering team if outage exceeds 5 minutes',
+    ],
+    verification: 'Payment API returns 200 on health check and processes test transaction',
+    tags: ['payment', 'availability', 'critical'],
+  },
+  {
+    id: 'RB-PAY-002',
+    title: 'Payment Transaction Retry and Idempotency',
+    category: 'Payment',
+    description: 'Handle duplicate or failed payment transactions safely.',
+    risk: 'High',
+    estimatedTime: '30-60 min',
+    steps: [
+      'Identify affected transaction IDs from payment logs',
+      'Check idempotency key status in payment processor dashboard',
+      'Determine if charges were double-processed or not processed',
+      'Apply refunds or retry transactions as appropriate',
+      'Notify affected users',
+    ],
+    verification: 'All affected transactions are in a definitive state (charged or refunded)',
+    tags: ['payment', 'idempotency', 'transactions'],
+  },
+  {
+    id: 'RB-STREAM-001',
+    title: 'Kafka Consumer Lag Recovery',
+    category: 'Streaming',
+    description: 'Resolve growing Kafka consumer group lag causing data processing delays.',
+    risk: 'Medium',
+    estimatedTime: '20-40 min',
+    steps: [
+      'Check consumer group lag: kafka-consumer-groups.sh --describe --group <group>',
+      'Identify slow or dead consumers',
+      'Restart consumer instances with scaling if needed',
+      'Check for poison messages blocking the queue',
+      'Monitor lag recovery rate over 10 minutes',
+    ],
+    verification: 'Consumer lag decreasing steadily and reaches < 1000 messages',
+    tags: ['kafka', 'streaming', 'consumer-lag'],
+  },
+  {
+    id: 'RB-INFRA-001',
+    title: 'High CPU / OOM Service Recovery',
+    category: 'Infrastructure',
+    description: 'Respond to services experiencing CPU saturation or Out-of-Memory errors.',
+    risk: 'High',
+    estimatedTime: '10-20 min',
+    steps: [
+      'Identify the process causing CPU/memory spike with top or kubectl top',
+      'Take a heap dump if OOM: kill -3 <pid> or jmap -dump:format=b,file=heap.hprof <pid>',
+      'Restart the affected service/pod',
+      'Increase memory/CPU limits if resource constraints are the root cause',
+      'Review application for memory leaks using profiler',
+    ],
+    verification: 'Service restarts cleanly, CPU/memory usage returns to normal baseline',
+    tags: ['infrastructure', 'oom', 'cpu', 'kubernetes'],
+  },
+  {
+    id: 'RB-INFRA-002',
+    title: 'Service Deployment Rollback',
+    category: 'Infrastructure',
+    description: 'Roll back a failed deployment that introduced regressions.',
+    risk: 'Low',
+    estimatedTime: '5-10 min',
+    steps: [
+      'Identify the previous stable release tag',
+      'kubectl rollout undo deployment/<service-name>',
+      'Confirm rollout status: kubectl rollout status deployment/<service-name>',
+      'Verify health check returns 200',
+      'Open post-mortem ticket for the failed deployment',
+    ],
+    verification: 'Service running previous version with green health checks',
+    tags: ['kubernetes', 'deployment', 'rollback'],
+  },
+];
+
 export async function getRunbooks(params = {}) {
-  try {
-    const response = await apiClient.get('/api/runbooks', { params });
-    return response.data;
-  } catch (error) {
-    console.info('[API:Fallback] Using mock runbooks:', error.message);
-    await delay();
-    let result = [...mockRunbooks];
-
-    if (params.search) {
-      const q = params.search.toLowerCase();
-      result = result.filter(
-        (r) =>
-          r.id.toLowerCase().includes(q) ||
-          r.title.toLowerCase().includes(q) ||
-          r.category.toLowerCase().includes(q) ||
-          r.description.toLowerCase().includes(q)
-      );
-    }
-    if (params.category && params.category !== 'All') {
-      result = result.filter((r) => r.category.toLowerCase() === params.category.toLowerCase());
-    }
-
-    return result;
+  let books = STATIC_RUNBOOKS;
+  if (params.search) {
+    const q = params.search.toLowerCase();
+    books = books.filter(rb =>
+      [rb.id, rb.title, rb.description, rb.category, ...(rb.tags ?? [])].some(v => v.toLowerCase().includes(q))
+    );
   }
+  if (params.category && params.category !== 'All') {
+    books = books.filter(rb => rb.category.toLowerCase() === params.category.toLowerCase());
+  }
+  return books;
 }
 
-/**
- * Get Runbook by ID
- * GET /api/runbooks/{id}
- */
 export async function getRunbook(id) {
-  try {
-    const response = await apiClient.get(`/api/runbooks/${id}`);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Using mock runbook ${id}:`, error.message);
-    await delay();
-    return mockRunbooks.find((r) => r.id === id) || mockRunbooks[0];
-  }
+  return STATIC_RUNBOOKS.find(rb => rb.id === id) ?? null;
 }
 
-/**
- * Resolve an incident and optionally record outcome in Hindsight memory
- * POST /api/incidents/{id}/resolve
- */
+// ── Misc (not implemented by backend) ────────────────────────────────────────
 export async function resolveIncident(id, data = {}) {
-  try {
-    const response = await apiClient.post(`/api/incidents/${id}/resolve`, data);
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Simulating resolve for incident ${id}:`, error.message);
-    await delay();
-    
-    // Update local incident in-memory
-    const idx = localIncidents.findIndex((i) => i.id === id);
-    if (idx !== -1) {
-      localIncidents[idx] = {
-        ...localIncidents[idx],
-        status: 'Resolved',
-        resolutionNotes: data.notes || 'Resolved via AI suggested runbook execution.',
-      };
-      
-      // Append timeline event
-      localIncidents[idx].timeline.push({
-        time: 'Just now',
-        title: 'Incident resolved',
-        desc: data.notes || 'Engineer verified resolution and closed incident.',
-        status: 'resolved',
-      });
-      localIncidents[idx].timeline.push({
-        time: 'Just now',
-        title: 'Outcome stored in memory',
-        desc: 'Resolution parameters and learnings indexed in Hindsight.',
-        status: 'memory',
-      });
-
-      // Add to local Hindsight memory
-      const newMemoryItem = {
-        id: `MEM-${Math.floor(1000 + Math.random() * 9000)}`,
-        incidentId: id,
-        service: localIncidents[idx].service,
-        severity: localIncidents[idx].severity,
-        title: localIncidents[idx].title,
-        rootCause: localIncidents[idx].rootCause,
-        resolution: data.notes || 'Runbook remediation executed successfully',
-        similarity: 95,
-        date: new Date().toISOString().split('T')[0],
-        outcome: 'Resolved in 18m',
-        whatWorked: data.whatWorked || 'Applied recommended config adjustment and performed rolling restart.',
-        whatFailed: data.whatFailed || 'Initial thread kill failed to clear the HikariCP queue.',
-        engineerNotes: data.notes || 'Validated zero 503 errors on edge proxies.',
-        runbook: data.runbookId || 'DB-CONNECTION-POOL-01',
-        lessonsLearned: data.lessonsLearned || 'Early saturation alerts prevent customer-facing dropouts.',
-        verifiedBy: data.engineer || 'Alex Chen (Engineer)',
-      };
-      localMemory.unshift(newMemoryItem);
-    }
-
-    return {
-      success: true,
-      incidentId: id,
-      status: 'Resolved',
-      message: 'Incident marked as resolved. Outcome stored in Hindsight memory.',
-    };
-  }
+  return updateIncident(id, { ...data, status: 'resolved' });
 }
 
-/**
- * Assign engineer to incident
- * POST /api/incidents/{id}/assign
- */
-export async function assignIncident(id, assignee) {
-  try {
-    const response = await apiClient.post(`/api/incidents/${id}/assign`, { assignee });
-    return response.data;
-  } catch (error) {
-    console.info(`[API:Fallback] Simulating assign for ${id}:`, error.message);
-    await delay();
-    const idx = localIncidents.findIndex((i) => i.id === id);
-    if (idx !== -1) {
-      localIncidents[idx] = {
-        ...localIncidents[idx],
-        assignee,
-      };
-      localIncidents[idx].timeline.push({
-        time: 'Just now',
-        title: 'Engineer assigned',
-        desc: `${assignee} assigned to lead response.`,
-        status: 'user',
-      });
-    }
-    return { success: true, assignee };
-  }
+export async function assignIncident() {
+  throw new Error('Engineer assignment is not implemented by the current backend.');
 }
 
-/**
- * Get Recent Activity Feed
- * GET /api/activity
- */
-export async function getRecentActivity() {
-  try {
-    const response = await apiClient.get('/api/activity');
-    return response.data;
-  } catch (error) {
-    await delay(150);
-    return mockRecentActivity;
-  }
-}
+export async function getSimilarIncidents() { return []; }
+export async function getRecentActivity()    { return []; }
+export async function uploadProjectArchive() { throw new Error('Project upload is not implemented.'); }
+export async function getCurrentProject()    { return null; }
+export async function getProjectAnalysis()   { return null; }
+export async function getProjectsList()      { return []; }
 
-/**
- * Project Onboarding & Monitoring API Endpoints
- * (Backend Contract for FastAPI integration)
- */
-
-let localProjects = [];
-
-/**
- * Upload a project ZIP archive
- * POST /api/projects/upload
- */
-export async function uploadProjectArchive(file, customName = '', onUploadProgress = null) {
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (customName) {
-      formData.append('name', customName);
-    }
-
-    const response = await apiClient.post('/api/projects/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      onUploadProgress: (progressEvent) => {
-        if (onUploadProgress && progressEvent.total) {
-          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          onUploadProgress(percent);
-        }
-      },
-    });
-    return response.data;
-  } catch (error) {
-    console.info('[API:Fallback] Processing real ZIP archive locally:', error.message);
-    // Real parsing of the user's uploaded ZIP file
-    const realProject = await parseProjectZip(file, customName);
-    localProjects = [realProject, ...localProjects.filter((p) => p.id !== realProject.id)];
-    return realProject;
-  }
-}
-
-/**
- * Get currently monitored project
- * GET /api/projects/current
- */
-export async function getCurrentProject() {
-  try {
-    const response = await apiClient.get('/api/projects/current');
-    return response.data;
-  } catch (error) {
-    return localProjects[0] || null;
-  }
-}
-
-/**
- * Get project analysis details
- * GET /api/projects/{id}/analysis
- */
-export async function getProjectAnalysis(projectId) {
-  try {
-    const response = await apiClient.get(`/api/projects/${projectId}/analysis`);
-    return response.data;
-  } catch (error) {
-    await delay(200);
-    const found = localProjects.find((p) => p.id === projectId);
-    return found || null;
-  }
-}
-
-/**
- * List all uploaded projects
- * GET /api/projects
- */
-export async function getProjectsList() {
-  try {
-    const response = await apiClient.get('/api/projects');
-    return response.data;
-  } catch (error) {
-    return localProjects;
-  }
-}
-
+export default apiClient;

@@ -1,59 +1,38 @@
-import React from 'react';
+﻿import React from 'react';
+import { CheckCircle2, AlertTriangle, Info, X, Zap } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { CheckCircle2, AlertCircle, AlertTriangle, Info, Sparkles, X } from 'lucide-react';
+
+const cfg = {
+  success:  { icon: CheckCircle2, bg: 'bg-white', border: 'border-l-emerald-500', icon_c: 'text-emerald-500', title_c: 'text-slate-800' },
+  critical: { icon: AlertTriangle, bg: 'bg-white', border: 'border-l-red-500',     icon_c: 'text-red-500',     title_c: 'text-slate-800' },
+  warning:  { icon: AlertTriangle, bg: 'bg-white', border: 'border-l-amber-500',   icon_c: 'text-amber-500',   title_c: 'text-slate-800' },
+  info:     { icon: Info,          bg: 'bg-white', border: 'border-l-blue-500',    icon_c: 'text-blue-500',    title_c: 'text-slate-800' },
+  ai:       { icon: Zap,           bg: 'bg-white', border: 'border-l-violet-500',  icon_c: 'text-violet-500',  title_c: 'text-slate-800' },
+};
+
+function Toast({ toast, onRemove }) {
+  const c = cfg[toast.type] || cfg.info;
+  const Icon = c.icon;
+  return (
+    <div className={`flex items-start gap-3 p-4 rounded-xl ${c.bg} border border-slate-200 border-l-4 ${c.border} shadow-lg min-w-[300px] max-w-sm`}>
+      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${c.icon_c}`} />
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm font-semibold ${c.title_c}`}>{toast.title}</p>
+        {toast.message && <p className="text-xs text-slate-500 mt-0.5">{toast.message}</p>}
+      </div>
+      <button onClick={()=>onRemove(toast.id)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0">
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
 
 export default function ToastContainer() {
   const { toasts, removeToast } = useApp();
-
-  if (toasts.length === 0) return null;
-
+  if (!toasts || toasts.length === 0) return null;
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col space-y-2.5 max-w-md w-full pointer-events-none">
-      {toasts.map((toast) => {
-        let borderClass = 'border-border';
-        let bgClass = 'bg-card';
-        let icon = <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />;
-
-        if (toast.type === 'success') {
-          borderClass = 'border-low/40';
-          bgClass = 'bg-[#0f1d22]';
-          icon = <CheckCircle2 className="w-4 h-4 text-low shrink-0 mt-0.5" />;
-        } else if (toast.type === 'critical') {
-          borderClass = 'border-critical/40';
-          bgClass = 'bg-[#1f1317]';
-          icon = <AlertCircle className="w-4 h-4 text-critical shrink-0 mt-0.5" />;
-        } else if (toast.type === 'warning') {
-          borderClass = 'border-medium/40';
-          bgClass = 'bg-[#1e1b12]';
-          icon = <AlertTriangle className="w-4 h-4 text-medium shrink-0 mt-0.5" />;
-        } else if (toast.type === 'ai') {
-          borderClass = 'border-ai/40 shadow-glow-ai';
-          bgClass = 'bg-[#151226]';
-          icon = <Sparkles className="w-4 h-4 text-ai-light shrink-0 mt-0.5" />;
-        }
-
-        return (
-          <div
-            key={toast.id}
-            className={`pointer-events-auto flex items-start gap-3 p-3.5 rounded-lg border shadow-xl text-sm ${bgClass} ${borderClass} transition-all duration-300 animate-in fade-in slide-in-from-bottom-3`}
-          >
-            {icon}
-            <div className="flex-1 min-w-0">
-              <p className="font-medium text-gray-200">{toast.title}</p>
-              {toast.message && (
-                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{toast.message}</p>
-              )}
-            </div>
-            <button
-              onClick={() => removeToast(toast.id)}
-              className="text-gray-400 hover:text-gray-200 transition-colors p-1 -mr-1 -mt-1 rounded"
-              aria-label="Close notification"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        );
-      })}
+    <div className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2">
+      {toasts.map(t => <Toast key={t.id} toast={t} onRemove={removeToast} />)}
     </div>
   );
 }
